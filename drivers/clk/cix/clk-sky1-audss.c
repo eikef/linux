@@ -534,6 +534,8 @@ static int sky1_audss_clks_enable(struct sky1_audss_priv *priv)
 	int i, ret;
 
 	for (i = 0; i < SKY1_AUDSS_CLKS_NUM; i++) {
+		if (IS_ERR_OR_NULL(priv->parent_clks[i]))
+			continue;
 		ret = clk_prepare_enable(priv->parent_clks[i]);
 		if (ret) {
 			dev_err(priv->dev, "failed to enable %s\n",
@@ -553,8 +555,11 @@ static void sky1_audss_clks_disable(struct sky1_audss_priv *priv)
 {
 	int i;
 
-	for (i = 0; i < SKY1_AUDSS_CLKS_NUM; i++)
+	for (i = 0; i < SKY1_AUDSS_CLKS_NUM; i++) {
+		if (IS_ERR_OR_NULL(priv->parent_clks[i]))
+			continue;
 		clk_disable_unprepare(priv->parent_clks[i]);
+	}
 }
 
 /* Runtime PM callbacks */
@@ -727,12 +732,25 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 		return dev_err_probe(dev, PTR_ERR(priv->regmap),
 				     "failed to get parent regmap\n");
 
-	/* Get parent clocks from SCMI */
+	/*
+	 * NCZ CIX Sky1 boot fix (patch 9014): don't defer if parent clocks
+	 * aren't available. In 7.1.2, the clk-sky1-acpi driver's 207 clkdev
+	 * entries aren't visible to the audss-clk probe at the right time,
+	 * causing the driver to defer indefinitely. Without the audss-clk
+	 * power domain, the PCIe controller (CIXH2030) and thus NVMe never
+	 * enumerate, so rootfs never mounts.
+	 *
+	 * Warn if a parent clock is missing but continue probe. The internal
+	 * audss clocks still get registered (with no parent). When the SCMI
+	 * clocks become available later, clk_set_parent can be called from
+	 * userspace (or the deferred probe will retry naturally).
+	 */
 	for (i = 0; i < SKY1_AUDSS_CLKS_NUM; i++) {
 		priv->parent_clks[i] = devm_clk_get(dev, sky1_audss_clk_names[i]);
-		if (IS_ERR(priv->parent_clks[i]))
-			return dev_err_probe(dev, PTR_ERR(priv->parent_clks[i]),
-					     "failed to get %s\n", sky1_audss_clk_names[i]);
+		if (IS_ERR(priv->parent_clks[i])) {
+			dev_warn(dev, "parent clock %s not ready (%ld), continuing without it\n",
+				 sky1_audss_clk_names[i], PTR_ERR(priv->parent_clks[i]));
+		}
 	}
 
 	/* Allocate clock data */
@@ -777,22 +795,23 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 	}
 
 	for (i = 0; i < SKY1_AUDSS_CLKS_NUM; i++) {
+		if (IS_ERR_OR_NULL(priv->parent_clks[i]))
+			continue;
 		ret = clk_set_rate(priv->parent_clks[i], sky1_audss_clk_rates[i]);
 		if (ret)
 			dev_warn(dev, "failed to set rate for %s\n", sky1_audss_clk_names[i]);
 	}
 
-	/* Get and deassert NOC reset */
-	priv->rst_noc = devm_reset_control_get(dev, "noc");
+	/* Get and deassert NOC reset (NCZ patch 9014: not fatal if missing) */
+	priv->rst_noc = devm_reset_control_get_optional_exclusive(dev, "noc");
 	if (IS_ERR(priv->rst_noc)) {
-		ret = dev_err_probe(dev, PTR_ERR(priv->rst_noc),
-				    "failed to get noc reset\n");
-		goto err_clks;
+		dev_warn(dev, "noc reset not ready, continuing without it\n");
+		priv->rst_noc = NULL;
+	} else {
+		reset_control_assert(priv->rst_noc);
+		usleep_range(1, 2);
+		reset_control_deassert(priv->rst_noc);
 	}
-
-	reset_control_assert(priv->rst_noc);
-	usleep_range(1, 2);
-	reset_control_deassert(priv->rst_noc);
 
 	/* Map RCSU for DSP initialization */
 	priv->rcsu_base = ioremap(SKY1_AUDSS_RCSU_ADDR, SKY1_AUDSS_RCSU_LEN);
