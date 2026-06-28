@@ -397,6 +397,23 @@ static int __rpm_callback(int (*cb)(struct device *), struct device *dev)
 	int retval = 0, idx;
 	bool use_links = dev->power.links_count > 0;
 
+	/*
+	 * NCZ CIX Sky1 boot fix (patch 9012): skip ALL runtime PM callbacks
+	 * (resume AND suspend) until late_initcall sets cix_system_ready.
+	 *
+	 * Patch 9011 only gated __pm_runtime_resume, but the crash also
+	 * occurs via rpm_suspend -> acpi_subsys_runtime_suspend ->
+	 * regmap_read/write on unready syscon MMIO during system idle.
+	 *
+	 * Return 0 (success) directly since __rpm_callback has no 'out'
+	 * label (only 'fail:'). The actual hardware state will be set up
+	 * later when the system is ready.
+	 */
+	if (!cix_system_ready && cb) {
+		spin_unlock_irq(&dev->power.lock);
+		return 0;
+	}
+
 	if (dev->power.irq_safe) {
 		spin_unlock(&dev->power.lock);
 	} else {
