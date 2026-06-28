@@ -22,6 +22,7 @@
 #include <linux/clkdev.h>
 #include <linux/module.h>
 #include <linux/platform_device.h>
+#include <linux/pm_runtime.h>
 
 struct sky1_acpi_clk {
 	struct device *dev;

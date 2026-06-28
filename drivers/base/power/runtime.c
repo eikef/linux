@@ -17,6 +17,26 @@
 #include "../base.h"
 #include "power.h"
 
+/*
+ * NCZ CIX Sky1 boot fix: gate __pm_runtime_resume until the system is
+ * fully initialized. During early boot, deferred probe retries call
+ * pm_runtime_resume which triggers driver runtime_resume callbacks that
+ * touch unready syscon MMIO (reset not deasserted, power domain not on),
+ * causing SError. We skip the actual resume; the device's hardware state
+ * will be set up later when its driver properly resumes it. Set in
+ * late_initcall after all CIX drivers have had a chance to probe.
+ */
+static bool cix_system_ready __read_mostly;
+bool cix_pm_system_ready(void) { return cix_system_ready; }
+EXPORT_SYMBOL_GPL(cix_pm_system_ready);
+static int __init cix_system_ready_init(void)
+{
+	cix_system_ready = true;
+	pr_info("cix_pm: system ready - pm_runtime callbacks enabled\n");
+	return 0;
+}
+late_initcall(cix_system_ready_init);
+
 typedef int (*pm_callback_t)(struct device *);
 
 static inline pm_callback_t get_callback_ptr(const void *start, size_t offset)
@@ -1189,6 +1209,23 @@ int __pm_runtime_resume(struct device *dev, int rpmflags)
 
 	might_sleep_if(!(rpmflags & RPM_ASYNC) && !dev->power.irq_safe &&
 			dev->power.runtime_status != RPM_ACTIVE);
+
+	/*
+	 * NCZ CIX Sky1 boot fix: skip the actual runtime resume until the
+	 * system is ready. During early boot (before late_initcall sets
+	 * cix_system_ready), deferred probe retries trigger this function,
+	 * which would call the driver\'s runtime_resume callback. That
+	 * callback often touches syscon MMIO that is not yet powered/reset,
+	 * causing SError. We return 1 (RPM_ACTIVE short-circuit) so the
+	 * caller proceeds as if the device is already active. The device\'s
+	 * actual hardware initialization happens later when the driver
+	 * properly resumes it.
+	 */
+	if (!cix_system_ready) {
+		if (rpmflags & RPM_GET_PUT)
+			atomic_inc(&dev->power.usage_count);
+		return 1;
+	}
 
 	if (rpmflags & RPM_GET_PUT)
 		atomic_inc(&dev->power.usage_count);
