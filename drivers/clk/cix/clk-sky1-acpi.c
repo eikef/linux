@@ -159,6 +159,24 @@ static int sky1_acpi_clk_probe(struct platform_device *pdev)
 	if (!priv)
 		return -ENOMEM;
 
+	/*
+	 * ACPI power management (NCZ patch 9010 — fixes Unbalanced pm_runtime_enable
+	 * warning seen with initcall_debug at t=0.591s on .66):
+	 *   - pm_runtime_set_active: mark device as RPM_ACTIVE so the post-probe
+	 *     pm_runtime_resume() in __rpm_callback is skipped (no unready MMIO touch).
+	 *   - pm_runtime_get_noresume: keep an active reference count.
+	 *   - acpi_device_set_power(D0): run _PS0 to activate ACPI power resources.
+	 *
+	 * NOTE: do NOT call pm_runtime_enable() here — the platform core calls it
+	 * automatically after probe returns. Calling it here causes
+	 * "Unbalanced pm_runtime_enable!" warning.
+	 */
+	if (has_acpi_companion(&pdev->dev)) {
+		pm_runtime_set_active(&pdev->dev);
+		pm_runtime_get_noresume(&pdev->dev);
+		acpi_device_set_power(ACPI_COMPANION(&pdev->dev), ACPI_STATE_D0);
+	}
+
 	priv->dev = &pdev->dev;
 
 	status = acpi_walk_namespace(ACPI_TYPE_DEVICE, ACPI_ROOT_OBJECT,
