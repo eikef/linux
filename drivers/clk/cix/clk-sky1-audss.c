@@ -722,8 +722,10 @@ static int sky1_audss_clk_probe(struct platform_device *pdev)
 			if (syscon_dev) {
 				priv->regmap = dev_get_regmap(syscon_dev, NULL);
 				put_device(syscon_dev);
-				if (!priv->regmap)
-					priv->regmap = ERR_PTR(-EPROBE_DEFER);
+				/* NCZ patch 9014b: don't defer if regmap not ready yet.
+				 * The regmap will be available later. Continue with NULL regmap.
+				 * The IS_ERR_OR_NULL checks in clks_enable will skip regmap access.
+				 */
 			}
 		}
 	}
