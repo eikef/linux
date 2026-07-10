@@ -537,6 +537,12 @@ static const struct sfp_quirk sfp_quirks[] = {
 	SFP_QUIRK("FS", "GPON-ONU-34-20BI", sfp_quirk_2500basex,
 		  sfp_fixup_ignore_tx_fault),
 
+	// Fiberstore GPON-SFP-ONTMAC can operate at 2500base-X, but reports 1.2GBd
+	// NRZ in their EEPROM; management interface not available without fibre connection
+	// if not also ignoring los
+	SFP_QUIRK("FS", "GPON-SFP-ONTMACI", sfp_quirk_odi, 
+		  sfp_fixup_ignore_tx_fault_and_los),
+
 	SFP_QUIRK_F("HALNy", "HL-GSFP", sfp_fixup_halny_gsfp),
 
 	SFP_QUIRK_F("H-COM", "SPP425H-GAB4", sfp_fixup_potron),
